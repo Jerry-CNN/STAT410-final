@@ -1,0 +1,158 @@
+---
+title: "Proposal"
+author: "Yanxiao Cai"
+date: '2022-11-04'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+library(dplyr)
+library(faraway)
+library(ggcorrplot)
+library(gridExtra)
+library(GGally)
+library(MASS)
+```
+The dataset I am using is collected by WHO and United Nations. The dataset aims to find if there exist any relationships between people’s life expectancy and the affect of immunization such as Hepatitis B and Diphtheria. This project will focus on interpreting the factors that contribute to predicting the life expectancy and difference between different developed and developing countries.
+```{r, echo=FALSE}
+data <- read.csv("Life Expectancy Data.csv")
+```
+The dataset contains data from year 2000-2015 for 193 countries and consists of 22 Columns and 2938 rows. There are Na values exists in the dataset for less known countries such as Vanuatu, Tonga, Togo. Let's take a look at all the potential variables and some rows of the data.
+
+```{r, echo=FALSE}
+data[c(1,2),]
+```
+
+##Data Cleaning
+
+In order to remove the effect of the autocorrelation, this project will focus on analyzes data of year 2014 from the dataset since it is close to now. The first problem that we notice is that the dataset contains data that exceed the range. For example, the variable under.five.deaths which represents the number of under-five deaths per 1000 population, has lots of values exceeding 1000.
+```{r}
+data[data$under.five.deaths > 1000|data$infant.deaths > 1000,][,c("infant.deaths","under.five.deaths")][c(1,2,3,4),]
+```
+Therefore, we remove all the impossible values from the dataset as well as the na values. The 2014 dataset after cleaning now includes 113 data points.
+```{r}
+data2014 <- subset(data,Year==2014)
+a <- na.omit(data2014)
+a$Status <- ifelse(a$Status == "Developing", 1, 0)
+a <- a[a$under.five.deaths<=1000,]
+a <- a[a$infant.deaths<=1000,]
+a<- a[a$Measles<=1000,]
+a<- a[a$Life.expectancy<=150,]
+a[c(1,2),]
+```
+## Data Visualization
+
+The following plot shows the distribution of the response variable life expectancy of 2014. it’s obvious to see that the distribution is approximately normal with a little left skewed.Thus the assumption of linear model is met, which means we can proceed to see correlation between variables.
+```{r, echo=FALSE, warning=FALSE, message=FALSE,fig.height = 3, fig.width = 3,fig.align = 'center'}
+ggplot(data2014, aes(x=Life.expectancy)) +
+geom_histogram(aes(y=..density..), colour="black", fill="white")+
+geom_density(alpha=.2, fill="#FF6666")
+```
+
+Since there are 22 variable to investigate, which is too much plot if using a pairwise plot function. Instead, the investigation will be on the correlation matrix. From the matrix, we can see that life expectancy has strong correlation with Schooling(positively), income.composition.of.resources(positively),alcohol(positively),adult.mortality(negatively) and HIV.AIDS(negatively). In terms of multicolinearity, infant deaths and under five deaths are highly correlated, schooling and income.composition.of.resources are highly correlated, HIV.AIDS is relatively negatively correlated with income.composition.of.resources. Notice, the variable infant deaths is basically a subset of under five deaths, which is why they have high correlation. This will be kept as a remainder when judging the result model.
+```{r,fig.height = 9, fig.width = 9, echo=FALSE,fig.align = 'center'}
+drops <- c("Country","Year")
+var <- a[,!(names(a) %in% drops)]
+corr <- round(cor(na.omit(var)), 1)
+ggcorrplot(corr, hc.order = TRUE, type = "lower",
+lab = TRUE)
+```
+## Model Building
+The first model uses all of the variables in the dataset. Below is the performance of the model, the adjusted $R^2 = 0.8686$ which is fairly good. However, we can see that lots of the variables have very high p-value. 
+```{r, echo=FALSE}
+drops <- c("Country","Year")
+var <- a[,!(names(a) %in% drops)]
+model1<-lm(Life.expectancy~., data=var)
+summary(model1)
+```
+We will then check the assumptions of this model. The first plot shows a relative flat line which means that the linearity is checked. The QQ plot shows that the data is approximately normal distributed but there is a tail at the end, which we should investigate later. The scale-location plot did not show a flat line which means that the variance is increasing. The Residuals vs Leverage plot did not show any outliers but some points of high leverage.
+```{r, echo=FALSE,fig.height = 5, fig.width = 5,fig.align='center'}
+par(mfrow= c(2,2))
+plot(model1)
+```
+By explicitly check the three high leverage point in the dataset, we can see that all these observations has some variables that are very far away from the mean value. Observation 194 has a fairly large value of infant.deaths and Observation 1831 has a uncommonly large value of income.composition.of.resources. There are no clear evidence that these values are not valid, we will keep all these large leverage points.
+```{r, echo=FALSE}
+data[c(194,1831,2395),]
+```
+## Improvement 
+The first optimization, we will use AIC as the criterion.
+```{r}
+fit1 <- lm(Life.expectancy ~ ., var)
+fit2 <- lm(Life.expectancy ~ 1, var)
+junk <- capture.output(model2<- stepAIC(fit1,direction="backward"))
+model2$coefficients
+```
+
+```{r}
+junk <- capture.output(model3 <- stepAIC(fit2,direction="forward",scope=list(upper=fit1,lower=fit2)))
+model3$coefficients
+```
+Both forward selection and backward selection chooses the same variables, Income.composition.of.resources, HIV.AIDS,Total.expenditure and Adult.Mortality. We will now perform forward and backward using BIC as the criterion.
+```{r}
+n <- length(var$Life.expectancy)
+junk <- capture.output(backBIC <- step(fit1,direction="backward", data=var,k = log(n)))
+backBIC$coefficients
+```
+```{r}
+junk <- capture.output(forwardBIC <- step(fit2,scope=list(upper=fit1,lower=fit2),direction="forward", data=var,k=log(n)))
+forwardBIC$coefficients
+```
+Both forward and backward selection using BIC gives the same result as AIC, thus the second model will just be using Income.composition.of.resources, HIV.AIDS,Total.expenditure and Adult.Mortality as variables. The new model consists of only four variables gives an adjusted $R^2 = 0.8777$ which is slightly better than the first model, while all the variables now have small pvalue.
+```{r, echo=FALSE}
+model4 <- lm(Life.expectancy ~ Adult.Mortality + Total.expenditure + HIV.AIDS + 
+    Income.composition.of.resources,data = var)
+summary(model4)
+```
+Again, we need to check the assumptions of the new model. The linearity seems to be improved, the QQ plot falls more on the diagonal line and it is now approximately normal. The scale location is showing a flat line which is a sign of constant variance, and the residual vs leverage plot now contains less points with high leverage and no outliers. Therefore, all the assumptions have been checked. We obtained the model 
+Life.expectancy = 45.158 + -0.009552Adult.Mortality + 0.412614Total.expenditure -1.051561HIV.AIDS + 37.982060Income.composition.of.resources.
+```{r, echo=FALSE,fig.height = 5, fig.width = 5,fig.align='center'}
+par(mfrow= c(2,2))
+plot(model4)
+```
+Below is the VIF of the variables, and none of them is bigger than $5$ which means that there is no colinearity exist in the new model.
+```{r, echo=FALSE}
+X2 <- model.matrix(forwardBIC)[,-1]
+cat(vif(X2), labels = names(vif(X2)), fill=1)
+```
+## Conclusion on the model
+From the model, we can see that adult.Mortality and HIV.AIDS are negatively correlated with Life.Expectancy and Income.composition.of.resources together with Total.expenditure are positively correlated with Life.expectancy. For adult mortality, which reflect the probability of dying between 15 and 60 years per 1000 population. Country with low adult mortality will generally have longer life since they are more likely to live longer, which make sense for it to be negatively correlated. HIV.AIDS which is a deadly disease. HIV infection accounted for 19% of deaths in 25-44 years age group which makes sense to be negatively correlated with life expectancy since HIV.AIDS has great spread ability. Total expenditure reflect general government expenditure on health as a percentage of total government expenditure, which could potentially suggests that spending more on the health care may help improve the life expectancy, and income composition of resources is the Human Development Index in terms of income composition of resources, which reflects the living condition of a country, if the citizens are getting good education, having a decent standard of living. By knowing the meaning of this variable, we can explain the high correlation between income.composition.of.resources and many other variables such as schooling, GDP and BMI, since it contains the information of people's living.
+
+## Difference between groups
+At the beginning of the project, we want to find out if there exist any difference between developed countries and developing countries. To do this, we will construct a model with the same variable as the final model we get from the last part, but this time make the status,which is 1 if developing country and 0 if developed, interacts with all of them.
+```{r}
+data_developed <- subset(data2014,Status=="Developed")
+data_developing <- subset(data2014,Status=="Developing")
+data_developed <- na.omit(data_developed)
+data_developing <- na.omit(data_developing)
+drops <- c("Country","Year","Status")
+data_developed <- data_developed[,!(names(data_developed) %in% drops)]
+data_developing <- data_developing[,!(names(data_developing) %in% drops)]
+inter_model2 <- lm(Life.expectancy~Adult.Mortality*Status + 
+    Total.expenditure*Status + HIV.AIDS*Status + Income.composition.of.resources*Status, data=var)
+summary(inter_model2)
+```
+One thing that stands out from this model is that the row of HIV.AIDS is na. By checking the data from both groups, the problem is that from the developed country, all the data points have the same value which introduce singularity in the model. What's more, developing data points takes 83.2% of the 2014 dataset while developed data points only takes 16.8% of the dataset, which means that the data from developed country is not enough, we should be careful when drawing conclusion from the model. Looking at the coefficient of interaction variable of income.composition.of.resources, which is fairly large compared to other interaction variable's coefficient. This may suggests that there is a difference between the life expectancy of developed countries and developing countries, and income composition of resources plays an important role in the difference. However, due to the high pvalue and potential insufficient number of observations in the dataset, the conclusion is not valid enough.
+```{r}
+data_developed[,"HIV.AIDS"]
+x <-  c(length(var$Status[var$Status == 1]),length(var$Status[var$Status == 0]))
+piepercent<- round(100*x/sum(x), 1)
+pie(x, labels = piepercent,col = rainbow(length(x)))
+legend("topright", c("developing","developed"), cex = 0.8,
+   fill = rainbow(length(x)))
+```
+## Summary & Discussion
+
+The final model obtained from the analysis is Life.expectancy = 45.158 + -0.009552Adult.Mortality + 0.412614Total.expenditure -1.051561HIV.AIDS + 37.982060Income.composition.of.resources, which potentially shows that HIV.AIDS and adult.mortality negatively impact a country's life expectancy, total.expenditure and income composition of resources may positively impact the life expectancy.Both income composition of resources and total expenditure reflects the living condition and health condition of a country, the positive relation means that a comfortable living and the spending on the health care could lead to longer life expectancy, and there might be a relation between diseases and life expectancy since HIV.AIDS appear as a significant variable in the model. Besides, the second section shows that there might be a difference between developed and developing countries, and the difference is caused mainly because the living condition between developed and developing countries, however, since there are not enough developed country data points, we can not be sure that the difference actually exists. In future work, the improvement can be done with first collecting more data from developed countries and use the same approach to see if there is difference between the status of the countries.
+
+## Appendix:
+
+
+
+
+
+
